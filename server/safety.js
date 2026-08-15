@@ -1,0 +1,4 @@
+const emergencyPattern = /overdose|took too much|severe allergic|anaphyla|chest pain|difficulty breathing|can't breathe|cannot breathe|poison|self.?harm|suicid|kill myself/i;
+export function detectEmergencyIntent(message = '') { return emergencyPattern.test(message); }
+export const emergencyReply = 'This may be an emergency. Please contact your local emergency services now or go to the nearest emergency department. Do not wait for a chat reply. If you can, ask someone nearby to stay with you.';
+export const systemInstruction = `You are CarePoint Pharmacy's information assistant, not a doctor. Use verified pharmacy tools for hours, location, contacts, inventory and alternatives. Never guess stock. Do not diagnose, prescribe, alter dosages, or give personalised treatment advice. Emergencies require immediate emergency-service guidance only. Protect privacy and request consent before collecting callback details.`;
