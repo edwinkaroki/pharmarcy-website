@@ -6,8 +6,11 @@ the local verified tools below, never from the model's general knowledge.
 
 import os
 import re
+import hashlib
+import secrets
 from collections import deque
 from datetime import datetime, timezone
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -17,6 +20,7 @@ from features import CITATIONS, REMINDERS, SESSIONS, TRANSLATIONS, add_message, 
 load_dotenv()
 print('Gemini enabled:', bool(os.getenv('GEMINI_API_KEY')), 'model:', os.getenv('GEMINI_MODEL'))
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 PHARMACY = {
     "name": "CarePoint Pharmacy",
@@ -38,6 +42,14 @@ INVENTORY = [
     {"name": "ORS", "generic_name": "Oral rehydration salts", "strength": "standard", "dosage_form": "sachets", "quantity_available": 42, "prescription_required": False, "category": "Hydration", "alternatives": []},
     {"name": "Amlodipine", "generic_name": "Amlodipine", "strength": "5mg", "dosage_form": "tablets", "quantity_available": 25, "prescription_required": True, "category": "Blood pressure", "alternatives": []},
     {"name": "Insulin glargine", "generic_name": "Insulin glargine", "strength": "100 units/mL", "dosage_form": "pen", "quantity_available": 8, "prescription_required": True, "category": "Diabetes", "alternatives": []},
+    {"name": "Adhesive bandages", "generic_name": "Adhesive bandages", "strength": "assorted", "dosage_form": "box of 20", "quantity_available": 35, "prescription_required": False, "category": "Wound care", "alternatives": []},
+    {"name": "Sterile gauze pads", "generic_name": "Sterile gauze", "strength": "10cm x 10cm", "dosage_form": "pack of 10", "quantity_available": 28, "prescription_required": False, "category": "Wound care", "alternatives": []},
+    {"name": "Nitrile examination gloves", "generic_name": "Nitrile gloves", "strength": "medium", "dosage_form": "box of 100", "quantity_available": 18, "prescription_required": False, "category": "Hospital supplies", "alternatives": []},
+    {"name": "Surgical face masks", "generic_name": "Surgical masks", "strength": "three-ply", "dosage_form": "box of 50", "quantity_available": 24, "prescription_required": False, "category": "Hospital supplies", "alternatives": []},
+    {"name": "Digital thermometer", "generic_name": "Digital thermometer", "strength": "fast-read", "dosage_form": "device", "quantity_available": 12, "prescription_required": False, "category": "Diagnostics", "alternatives": []},
+    {"name": "Automatic blood pressure monitor", "generic_name": "Blood pressure monitor", "strength": "upper arm", "dosage_form": "device", "quantity_available": 7, "prescription_required": False, "category": "Diagnostics", "alternatives": []},
+    {"name": "Disposable syringes", "generic_name": "Sterile syringes", "strength": "5mL", "dosage_form": "pack of 10", "quantity_available": 20, "prescription_required": True, "category": "Clinical supplies", "alternatives": []},
+    {"name": "Saline wound wash", "generic_name": "Sodium chloride", "strength": "0.9%", "dosage_form": "250mL spray", "quantity_available": 16, "prescription_required": False, "category": "Wound care", "alternatives": []},
 ]
 EMERGENCY_PATTERN = re.compile(r"overdose|took too much|severe allergic|anaphyla|chest pain|difficulty breathing|can't breathe|cannot breathe|poison|self.?harm|suicid|kill myself", re.I)
 SYSTEM_INSTRUCTION = """You are CarePoint Pharmacy's information assistant, not a doctor.
@@ -48,6 +60,38 @@ Keep responses concise, calm, and privacy-aware."""
 ANALYTICS = {"messages": 0, "emergency_escalations": 0, "callback_requests": 0, "requested_medicines": {}}
 EVENTS = deque(maxlen=100)
 LAST_GEMINI_ERROR = None
+USERS = {}
+AUTH_TOKENS = {}
+ADMIN_TOKENS = {}
+PRESCRIPTIONS = {}
+ORDERS = {}
+ORDER_STATES = ("Pending", "Processing", "Completed")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@carepoint.test")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def current_user():
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = AUTH_TOKENS.get(token)
+    return next((user for user in USERS.values() if user["id"] == user_id), None) if user_id else None
+
+
+def require_user():
+    user = current_user()
+    if not user:
+        return None, (jsonify({"error": "Sign in is required."}), 401)
+    return user, None
+
+
+def require_admin():
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if token not in ADMIN_TOKENS:
+        return None, (jsonify({"error": "Admin sign-in is required."}), 401)
+    return ADMIN_TOKENS[token], None
 
 
 def log_event(event_type: str, **details) -> None:
@@ -155,6 +199,150 @@ def gemini_reply(message: str) -> str | None:
         LAST_GEMINI_ERROR = f"{type(error).__name__}: {str(error)[:160]}"
         print(f"Gemini error: {LAST_GEMINI_ERROR}")
         return None
+
+
+@app.post("/api/auth/register")
+def register():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", "")).strip()
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+    if len(name) < 2 or "@" not in email or len(password) < 6:
+        return jsonify({"error": "Enter a name, valid email, and password of at least 6 characters."}), 400
+    if email in USERS:
+        return jsonify({"error": "An account with that email already exists."}), 409
+    user = {"id": uuid4().hex, "name": name, "email": email, "password_hash": hash_password(password)}
+    USERS[email] = user
+    token = secrets.token_urlsafe(32)
+    AUTH_TOKENS[token] = user["id"]
+    return jsonify({"token": token, "user": {"id": user["id"], "name": name, "email": email}}), 201
+
+
+@app.post("/api/auth/login")
+def login():
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email", "")).strip().lower()
+    user = USERS.get(email)
+    if not user or user["password_hash"] != hash_password(str(payload.get("password", ""))):
+        return jsonify({"error": "Email or password is incorrect."}), 401
+    token = secrets.token_urlsafe(32)
+    AUTH_TOKENS[token] = user["id"]
+    return jsonify({"token": token, "user": {"id": user["id"], "name": user["name"], "email": email}})
+
+
+@app.get("/api/auth/me")
+def auth_me():
+    user = current_user()
+    return jsonify({"user": {"id": user["id"], "name": user["name"], "email": user["email"]}}) if user else (jsonify({"user": None}), 401)
+
+
+@app.post("/api/auth/admin-login")
+def admin_login():
+    payload = request.get_json(silent=True) or {}
+    if str(payload.get("email", "")).strip().lower() != ADMIN_EMAIL.lower() or str(payload.get("password", "")) != ADMIN_PASSWORD:
+        return jsonify({"error": "Admin email or password is incorrect."}), 401
+    token = secrets.token_urlsafe(32)
+    ADMIN_TOKENS[token] = {"email": ADMIN_EMAIL, "role": "admin"}
+    return jsonify({"token": token, "admin": {"email": ADMIN_EMAIL, "role": "admin"}})
+
+
+@app.get("/api/catalog")
+def catalog():
+    query = request.args.get("search", "").strip().lower()
+    prices = {"Paracetamol": 250, "Ibuprofen": 320, "Amoxicillin": 680, "Cetirizine": 300, "Vitamin C": 450, "ORS": 180, "Amlodipine": 520, "Insulin glargine": 1850, "Adhesive bandages": 220, "Sterile gauze pads": 380, "Nitrile examination gloves": 1250, "Surgical face masks": 650, "Digital thermometer": 900, "Automatic blood pressure monitor": 4200, "Disposable syringes": 480, "Saline wound wash": 560}
+    products = [{**item, "price": prices.get(item["name"], 0)} for item in INVENTORY if not query or query in " ".join(str(value) for value in item.values()).lower()]
+    return jsonify({"products": products})
+
+
+@app.post("/api/prescriptions")
+def upload_prescription():
+    user, error = require_user()
+    if error:
+        return error
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "Choose an image or PDF prescription first."}), 400
+    extension = os.path.splitext(upload.filename)[1].lower()
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+    if extension not in allowed:
+        return jsonify({"error": "Only PDF, PNG, JPG, JPEG, and WEBP files are accepted."}), 400
+    content = upload.read()
+    if not content or len(content) > 10 * 1024 * 1024:
+        return jsonify({"error": "Prescription files must be under 10 MB."}), 400
+    record = {"id": uuid4().hex[:10], "filename": upload.filename, "type": extension[1:].upper(), "size": len(content), "status": "Received", "created_at": datetime.now(timezone.utc).isoformat(), "user_id": user["id"]}
+    PRESCRIPTIONS[record["id"]] = record
+    return jsonify({"prescription": {key: value for key, value in record.items() if key != "user_id"}}), 201
+
+
+@app.get("/api/admin/prescriptions")
+def admin_prescriptions():
+    _, error = require_admin()
+    if error:
+        return error
+    return jsonify({"prescriptions": [{key: value for key, value in record.items() if key != "user_id"} for record in PRESCRIPTIONS.values()]})
+
+
+@app.post("/api/admin/prescriptions/<prescription_id>/review")
+def review_prescription(prescription_id):
+    _, error = require_admin()
+    if error:
+        return error
+    prescription = PRESCRIPTIONS.get(prescription_id)
+    if not prescription:
+        return jsonify({"error": "Prescription not found."}), 404
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status", "Reviewed"))
+    if status not in {"Reviewed", "Needs information", "Approved", "Rejected"}:
+        return jsonify({"error": "Invalid review status."}), 400
+    prescription["status"] = status
+    prescription["review_note"] = str(payload.get("note", "")).strip()[:300]
+    prescription["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+    log_event("prescription_reviewed", status=status)
+    return jsonify({"prescription": {key: value for key, value in prescription.items() if key != "user_id"}})
+
+
+@app.get("/api/admin/analytics")
+def admin_analytics():
+    _, error = require_admin()
+    if error:
+        return error
+    return jsonify({**ANALYTICS, "prescriptions_received": len(PRESCRIPTIONS), "prescriptions_pending": sum(record["status"] == "Received" for record in PRESCRIPTIONS.values()), "orders": len(ORDERS), "events_recorded": len(EVENTS)})
+
+
+@app.get("/api/orders")
+def orders():
+    user, error = require_user()
+    if error:
+        return error
+    return jsonify({"orders": [order for order in ORDERS.values() if order["user_id"] == user["id"]]})
+
+
+@app.post("/api/orders")
+def create_order():
+    user, error = require_user()
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "Add at least one product to your order."}), 400
+    order = {"id": f"CP-{uuid4().hex[:6].upper()}", "user_id": user["id"], "items": items, "prescription_id": payload.get("prescription_id"), "status": "Pending", "created_at": datetime.now(timezone.utc).isoformat()}
+    ORDERS[order["id"]] = order
+    return jsonify({"order": order}), 201
+
+
+@app.post("/api/orders/<order_id>/advance")
+def advance_order(order_id):
+    user, error = require_user()
+    if error:
+        return error
+    order = ORDERS.get(order_id)
+    if not order or order["user_id"] != user["id"]:
+        return jsonify({"error": "Order not found."}), 404
+    current_index = ORDER_STATES.index(order["status"])
+    if current_index < len(ORDER_STATES) - 1:
+        order["status"] = ORDER_STATES[current_index + 1]
+    return jsonify({"order": order})
 
 
 @app.post("/api/chat")

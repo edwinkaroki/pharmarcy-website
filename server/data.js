@@ -13,5 +13,13 @@ export const inventory = [
   { id: 5, name: 'Vitamin C', generic: 'Ascorbic acid', strength: '1000mg', form: 'tablets', quantity: 0, prescription: false, category: 'Supplement', alternatives: ['Vitamin C 500mg tablets'] },
   { id: 6, name: 'ORS', generic: 'Oral rehydration salts', strength: 'standard', form: 'sachets', quantity: 42, prescription: false, category: 'Hydration', alternatives: [] },
   { id: 7, name: 'Amlodipine', generic: 'Amlodipine', strength: '5mg', form: 'tablets', quantity: 25, prescription: true, category: 'Blood pressure', alternatives: [] },
-  { id: 8, name: 'Insulin glargine', generic: 'Insulin glargine', strength: '100 units/mL', form: 'pen', quantity: 8, prescription: true, category: 'Diabetes', alternatives: [] }
+  { id: 8, name: 'Insulin glargine', generic: 'Insulin glargine', strength: '100 units/mL', form: 'pen', quantity: 8, prescription: true, category: 'Diabetes', alternatives: [] },
+  { id: 9, name: 'Adhesive bandages', generic: 'Adhesive bandages', strength: 'assorted', form: 'box of 20', quantity: 35, prescription: false, category: 'Wound care', alternatives: [] },
+  { id: 10, name: 'Sterile gauze pads', generic: 'Sterile gauze', strength: '10cm x 10cm', form: 'pack of 10', quantity: 28, prescription: false, category: 'Wound care', alternatives: [] },
+  { id: 11, name: 'Nitrile examination gloves', generic: 'Nitrile gloves', strength: 'medium', form: 'box of 100', quantity: 18, prescription: false, category: 'Hospital supplies', alternatives: [] },
+  { id: 12, name: 'Surgical face masks', generic: 'Surgical masks', strength: 'three-ply', form: 'box of 50', quantity: 24, prescription: false, category: 'Hospital supplies', alternatives: [] },
+  { id: 13, name: 'Digital thermometer', generic: 'Digital thermometer', strength: 'fast-read', form: 'device', quantity: 12, prescription: false, category: 'Diagnostics', alternatives: [] },
+  { id: 14, name: 'Automatic blood pressure monitor', generic: 'Blood pressure monitor', strength: 'upper arm', form: 'device', quantity: 7, prescription: false, category: 'Diagnostics', alternatives: [] },
+  { id: 15, name: 'Disposable syringes', generic: 'Sterile syringes', strength: '5mL', form: 'pack of 10', quantity: 20, prescription: true, category: 'Clinical supplies', alternatives: [] },
+  { id: 16, name: 'Saline wound wash', generic: 'Sodium chloride', strength: '0.9%', form: '250mL spray', quantity: 16, prescription: false, category: 'Wound care', alternatives: [] }
 ];
