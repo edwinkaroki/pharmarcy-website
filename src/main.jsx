@@ -40,17 +40,21 @@ function AuthPanel({ onAuth, onClose }) {
 
   const submit = async (event) => {
     event.preventDefault();
-    const response = await api(
-      `/api/auth/${mode === 'login' ? 'login' : 'register'}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form)
-      }
-    );
-    const data = await response.json();
-    if (!response.ok) return setError(data.error);
-    onAuth(data);
+    try {
+      const response = await api(
+        `/api/auth/${mode === 'login' ? 'login' : 'register'}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form)
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) return setError(data.error);
+      onAuth(data);
+    } catch {
+      setError('Unable to reach the pharmacy server. Please try again.');
+    }
   };
 
   return (
@@ -159,16 +163,20 @@ function AdminPanel({ onClose }) {
 
   const login = async (event) => {
     event.preventDefault();
-    const response = await api('/api/auth/admin-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form)
-    });
-    const data = await response.json();
-    if (!response.ok) return setError(data.error);
-    localStorage.setItem('carepoint_admin_token', data.token);
-    setToken(data.token);
-    setError('');
+    try {
+      const response = await api('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      });
+      const data = await response.json();
+      if (!response.ok) return setError(data.error);
+      localStorage.setItem('carepoint_admin_token', data.token);
+      setToken(data.token);
+      setError('');
+    } catch {
+      setError('Unable to reach the pharmacy server. Please try again.');
+    }
   };
 
   const review = async (id, status) => {
@@ -333,9 +341,43 @@ function App() {
   const [upload, setUpload] = useState(null);
   const [uploadNotice, setUploadNotice] = useState('');
   const [orderNotice, setOrderNotice] = useState('');
+  const [cartNotice, setCartNotice] = useState('');
   const [adminOpen, setAdminOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(() =>
+    localStorage.getItem('carepoint_dark_mode') === 'true'
+  );
 
   const token = localStorage.getItem('carepoint_token') || '';
+  const transportFee = cart.length ? 250 : 0;
+  const cartSubtotal = cart.reduce(
+    (total, product) => total + (product.price || 0),
+    0
+  );
+  const cartTotal = cartSubtotal + transportFee;
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark-mode', darkMode);
+    localStorage.setItem('carepoint_dark_mode', String(darkMode));
+  }, [darkMode]);
+
+  // Restore the signed-in account when the page is refreshed.
+  useEffect(() => {
+    if (!token) return;
+
+    api('/api/auth/me', {}, token)
+      .then(async (response) => {
+        if (!response.ok) {
+          localStorage.removeItem('carepoint_token');
+          return;
+        }
+
+        const data = await response.json();
+        setUser(data.user);
+      })
+      .catch(() => {
+        localStorage.removeItem('carepoint_token');
+      });
+  }, [token]);
 
   // Fetch catalog when search changes
   useEffect(() => {
@@ -394,7 +436,23 @@ function App() {
     }
   };
 
-  const addToCart = (product) => setCart((items) => [...items, product]);
+  const addToCart = (product) => {
+    if (!user) {
+      setCartNotice(
+        'Your basket is ready. Please create an account or sign in before adding items.'
+      );
+      window.setTimeout(() => setCartNotice(''), 3500);
+      return;
+    }
+
+    setCart((items) => [...items, product]);
+    setCartNotice(`${product.name} added to your order.`);
+    window.setTimeout(() => setCartNotice(''), 3500);
+  };
+
+  const removeFromCart = (productIndex) => {
+    setCart((items) => items.filter((_, index) => index !== productIndex));
+  };
 
   const uploadPrescription = async (event) => {
     event.preventDefault();
@@ -412,7 +470,13 @@ function App() {
   };
 
   const placeOrder = async () => {
-    if (!user) return setAuthOpen(true);
+    if (!user) {
+      setCartNotice(
+        'To place your order, please create an account or sign in first.'
+      );
+      window.setTimeout(() => setCartNotice(''), 3500);
+      return;
+    }
     if (!cart.length) return;
     const response = await api(
       '/api/orders',
@@ -420,12 +484,16 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: cart.map(({ id, name, strength, form }) => ({
+          items: cart.map(({ id, name, strength, form, price }) => ({
             id,
             name,
             strength,
-            form
-          }))
+            form,
+            price
+          })),
+          subtotal: cartSubtotal,
+          transport_fee: transportFee,
+          total: cartTotal
         })
       },
       token
@@ -450,6 +518,36 @@ function App() {
   return (
     <main>
       <section className="site-shell" aria-label="CarePoint Pharmacy">
+        {cartNotice && (
+          <div className="cart-toast" role="status" aria-live="polite">
+            <div>
+              <strong>{user ? 'Added to order' : 'Account needed'}</strong>
+              <span>{cartNotice}</span>
+            </div>
+            {user ? (
+              <a href="#order-summary">View order</a>
+            ) : (
+              <button
+                className="cart-account-action"
+                type="button"
+                onClick={() => {
+                  setCartNotice('');
+                  setAuthOpen(true);
+                }}
+              >
+                Sign in / create account
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setCartNotice('')}
+              aria-label="Dismiss notification"
+            >
+              x
+            </button>
+          </div>
+        )}
+
         {/* Navigation */}
         <nav className="nav-bar">
           <div className="brand">
@@ -465,6 +563,14 @@ function App() {
             <a href="#orders">Orders</a>
           </div>
           <div className="nav-actions">
+            <button
+              className="dark-mode-toggle"
+              onClick={() => setDarkMode((enabled) => !enabled)}
+              aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {darkMode ? '☀' : '☾'}
+            </button>
             <button className="admin-link" onClick={() => setAdminOpen(true)}>
               Staff
             </button>
@@ -628,20 +734,58 @@ function App() {
           </div>
 
           {/* Order Bar */}
-          <div className="order-bar">
+          <div className="order-bar" id="order-summary">
             <span>
               {cart.length
                 ? `${cart.length} item${cart.length > 1 ? 's' : ''} ready`
                 : 'Your order is empty'}
             </span>
-            <button
-              className="primary-button"
-              disabled={!cart.length}
-              onClick={placeOrder}
-            >
-              Place order <span>-&gt;</span>
-            </button>
+            {cart.length > 0 && <strong>KSh {cartTotal.toLocaleString()}</strong>}
           </div>
+
+          {cart.length > 0 && (
+            <div className="cart-panel" aria-label="Your order summary">
+              <div className="cart-panel-heading">
+                <div>
+                  <p className="eyebrow">YOUR ORDER</p>
+                  <h3>Review before checkout.</h3>
+                </div>
+                <span>{cart.length} item{cart.length > 1 ? 's' : ''}</span>
+              </div>
+
+              <div className="cart-items">
+                {cart.map((product, index) => (
+                  <div className="cart-item" key={`${product.id}-${index}`}>
+                    <div>
+                      <strong>{product.name}</strong>
+                      <span>{product.strength} {product.form || product.dosage_form}</span>
+                    </div>
+                    <strong>KSh {(product.price || 0).toLocaleString()}</strong>
+                    <button
+                      type="button"
+                      onClick={() => removeFromCart(index)}
+                      aria-label={`Remove ${product.name} from order`}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="cart-totals">
+                <span>Subtotal</span>
+                <strong>KSh {cartSubtotal.toLocaleString()}</strong>
+                <span>Transport</span>
+                <strong>KSh {transportFee.toLocaleString()}</strong>
+                <span className="cart-total-label">Total to pay</span>
+                <strong className="cart-total-value">KSh {cartTotal.toLocaleString()}</strong>
+              </div>
+
+              <button className="primary-button" onClick={placeOrder}>
+                Proceed to checkout <span>-&gt;</span>
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Workflow Grid - Prescriptions & Orders */}
@@ -701,9 +845,9 @@ function App() {
                     <div className="status-steps">
                       {['Pending', 'Processing', 'Completed'].map((status) => (
                         <span
-                          className={
+                          className={`status-${status.toLowerCase()} ${
                             status === order.status ? 'active' : ''
-                          }
+                          }`}
                           key={status}
                         >
                           {status}
